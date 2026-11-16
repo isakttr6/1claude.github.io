@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sketchpad</title>
+<style>
+  :root {
+    --bg: #e9ecf1;
+    --panel: #f8f9fb;
+    --border: #c5cad3;
+    --accent: #3b6fd8;
+    --text: #243041;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* Keep drawing gestures from selecting page text */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ---------- Toolbar ---------- */
+  header.toolbar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+  }
+  .group { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .sep { width: 1px; align-self: stretch; background: var(--border); }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 9px;
+    min-height: 30px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #eef3fc; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  label.inline { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  input[type=range] { width: 110px; }
+  select, input[type=number] {
+    font: inherit;
+    padding: 3px 4px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+  }
+  input[type=color] {
+    width: 34px; height: 30px; padding: 0;
+    border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer;
+  }
+  .swatches { display: grid; grid-template-columns: repeat(8, 20px); gap: 3px; }
+  .swatch {
+    width: 20px; height: 20px; padding: 0; min-height: 0;
+    border-radius: 4px; border: 1px solid rgba(0,0,0,.25);
+  }
+  .swatch.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- Canvas stage ---------- */
+  main.stage {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    padding: 24px;
+  }
+  .canvas-wrap {
+    position: relative;
+    margin: auto;          /* auto margins keep the canvas reachable when it overflows */
+    flex: none;
+    border: 1px solid #7d8594;
+    box-shadow: 0 2px 10px rgba(0,0,0,.15);
+    background: #fff;
+    line-height: 0;
+  }
+  #canvas {
+    display: block;
+    background: #fff;
+    cursor: crosshair;
+    touch-action: none;    /* stop touch from scrolling/zooming while drawing */
+  }
+  #textEditor {
+    position: absolute;
+    display: none;
+    z-index: 2;
+    margin: 0; padding: 0;
+    min-width: 40px;
+    background: transparent;
+    border: 1px dashed var(--accent);
+    outline: none;
+    resize: none;
+    overflow: hidden;
+    white-space: pre;
+    line-height: 1.2;
+    color: #000;
+  }
+
+  /* ---------- Status bar ---------- */
+  footer.status {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 5px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    font-size: 13px;
+  }
+  #hint { color: #5b6678; }
+  #zoomLabel { min-width: 52px; text-align: center; }
+
+  /* ---------- Confirmation dialog ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(20, 28, 40, .35);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: #fff;
+    border-radius: 10px;
+    padding: 18px 20px;
+    width: min(320px, 90vw);
+    box-shadow: 0 8px 30px rgba(0,0,0,.25);
+  }
+  .modal p { margin: 0 0 14px; font-size: 15px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .modal button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ---------- Small screens ---------- */
+  @media (max-width: 640px) {
+    .sep { display: none; }
+    input[type=range] { width: 90px; }
+    main.stage { padding: 12px; }
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <div class="group">
+    <button id="openBtn" title="Open an image from your device to keep editing">Open</button>
+    <button id="saveBtn" title="Save the drawing as a PNG file">Save PNG</button>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="group">
+    <button id="undoBtn" title="Undo (Ctrl+Z)" disabled>Undo</button>
+    <button id="redoBtn" title="Redo (Ctrl+Y)" disabled>Redo</button>
+    <button id="clearBtn" title="Clear the canvas (asks first)">Clear</button>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="group" id="tools">
+    <button data-tool="pencil" class="active" aria-pressed="true" title="Pencil / brush: drag to draw">Pencil</button>
+    <button data-tool="eraser" aria-pressed="false" title="Eraser: drag to erase">Eraser</button>
+    <button data-tool="fill" aria-pressed="false" title="Fill bucket: click an area to fill it">Fill</button>
+    <button data-tool="text" aria-pressed="false" title="Text: click the canvas and type">Text</button>
+    <button data-tool="line" aria-pressed="false" title="Line: drag to draw a straight line">Line</button>
+    <button data-tool="rect" aria-pressed="false" title="Rectangle: drag to draw">Rectangle</button>
+    <button data-tool="ellipse" aria-pressed="false" title="Ellipse: drag to draw">Ellipse</button>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="group">
+    <label class="inline" title="Width for pencil, eraser, line and shapes">
+      Size <input type="range" id="size" min="1" max="60" value="4">
+      <span id="sizeVal">4</span>
+    </label>
+    <label class="inline" title="Fill rectangles and ellipses with the selected color">
+      <input type="checkbox" id="fillShape"> Fill shapes
+    </label>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="group">
+    <label class="inline">Font
+      <select id="fontFamily" title="Font for text">
+        <option value="Arial, Helvetica, sans-serif">Sans</option>
+        <option value="Georgia, 'Times New Roman', serif">Serif</option>
+        <option value="'Courier New', Courier, monospace">Mono</option>
+      </select>
+    </label>
+    <label class="inline">Text size
+      <input type="number" id="fontSize" min="6" max="300" value="32" style="width:64px" title="Text size in canvas pixels">
+    </label>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="group">
+    <div class="swatches" id="palette" title="Palette"></div>
+    <input type="color" id="customColor" value="#000000" title="Pick a custom color">
+  </div>
+</header>
+
+<main class="stage" id="stage">
+  <div class="canvas-wrap" id="wrap">
+    <canvas id="canvas" width="960" height="600"></canvas>
+    <textarea id="textEditor" spellcheck="false" aria-label="Text to add to the drawing"></textarea>
+  </div>
+</main>
+
+<footer class="status">
+  <span id="toolName" style="font-weight:600">Pencil</span>
+  <span id="hint">Drag to draw</span>
+  <span class="group" style="margin-left:auto">
+    <button id="zoomOut" title="Zoom out">−</button>
+    <span id="zoomLabel">100%</span>
+    <button id="zoomIn" title="Zoom in">+</button>
+    <button id="fitBtn" title="Fit the canvas to the window">Fit</button>
+    <span id="dims"></span>
+  </span>
+</footer>
+
+<div class="modal-backdrop" id="clearModal" role="dialog" aria-modal="true" aria-labelledby="clearMsg">
+  <div class="modal">
+    <p id="clearMsg">Clear the whole canvas? You can still undo this.</p>
+    <div class="actions">
+      <button id="clearCancel">Cancel</button>
+      <button id="clearOk" class="primary">Clear</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ----- Setup -----
+  const $ = id => document.getElementById(id);
+  const canvas = $('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const stage = $('stage');
+  const wrap = $('wrap');
+  const editor = $('textEditor');
+
+  const MAX_HISTORY = 40;   // undo steps kept
+  const TOL = 24;           // per-channel tolerance for the fill bucket (handles antialiased edges)
+  const PALETTE = [
+    '#000000', '#7f7f7f', '#880015', '#ed1c24', '#ff7f27', '#fff200', '#22b14c', '#00a2e8',
+    '#3f48cc', '#a349a4', '#ffffff', '#c3c3c3', '#b97a57', '#ffaec9', '#ffc90e', '#7092be'
+  ];
+  const HINTS = {
+    pencil: 'Drag to draw',
+    eraser: 'Drag to erase (paints white)',
+    fill: 'Click a region to fill it with the color',
+    text: 'Click, type, then click away to place. Esc cancels, Ctrl+Enter places',
+    line: 'Drag to draw a line',
+    rect: 'Drag to draw a rectangle. Tick "Fill shapes" for a solid one',
+    ellipse: 'Drag to draw an ellipse. Tick "Fill shapes" for a solid one'
+  };
+  const NAMES = {
+    pencil: 'Pencil', eraser: 'Eraser', fill: 'Fill', text: 'Text',
+    line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse'
+  };
+
+  let tool = 'pencil';
+  let color = '#000000';
+  let zoom = 1;
+
+  let drawing = false;
+  let start = null, last = null;
+  let base = null;      // canvas snapshot taken at pointerdown (for shape previews and undo)
+  let dirty = false;    // has this stroke already been recorded in history?
+  let editing = null;   // {x, y} canvas coords of the open text box, or null
+
+  let undoStack = [];
+  let redoStack = [];
+
+  // White background so exported PNGs are never transparent
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // ----- History (undo / redo) -----
+  // Snapshots store the full ImageData, including its width and height,
+  // so undo/redo also restores canvas size (e.g. after opening an image).
+  const snapshot = () => ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  function pushHistory(img = snapshot()) {
+    undoStack.push(img);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack = [];
+    updateButtons();
+  }
+
+  function restore(img) {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.putImageData(img, 0, 0);
+    applyZoom();
+  }
+
+  function undo() {
+    if (!undoStack.length) return;
+    commitText();
+    redoStack.push(snapshot());
+    restore(undoStack.pop());
+    updateButtons();
+  }
+
+  function redo() {
+    if (!redoStack.length) return;
+    commitText();
+    undoStack.push(snapshot());
+    restore(redoStack.pop());
+    updateButtons();
+  }
+
+  // Records history once per stroke, on the first real change
+  function ensureHistory() {
+    if (!dirty) {
+      dirty = true;
+      pushHistory(base);
+    }
+  }
+
+  function updateButtons() {
+    $('undoBtn').disabled = !undoStack.length;
+    $('redoBtn').disabled = !redoStack.length;
+  }
+
+  // ----- Coordinates and zoom -----
+  // Maps a pointer position to canvas pixel coordinates, accounting for CSS scaling
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * canvas.width / r.width,
+      y: (e.clientY - r.top) * canvas.height / r.height
+    };
+  }
+
+  function applyZoom() {
+    canvas.style.width = canvas.width * zoom + 'px';
+    canvas.style.height = canvas.height * zoom + 'px';
+    canvas.style.imageRendering = zoom > 1 ? 'pixelated' : 'auto';
+    $('zoomLabel').textContent = Math.round(zoom * 100) + '%';
+    $('dims').textContent = canvas.width + ' × ' + canvas.height + ' px';
+    if (editing) positionEditor();
+  }
+
+  function setZoom(z) {
+    zoom = Math.min(8, Math.max(0.1, z));
+    applyZoom();
+  }
+
+  function fit() {
+    const pad = 48;
+    setZoom(Math.min((stage.clientWidth - pad) / canvas.width,
+                     (stage.clientHeight - pad) / canvas.height));
+  }
+
+  // ----- Colors and tools -----
+  function setColor(c) {
+    color = c;
+    $('customColor').value = c;
+    document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('sel', s.title === c));
+    syncEditorStyle();
+  }
+
+  function setTool(t) {
+    commitText();
+    tool = t;
+    document.querySelectorAll('[data-tool]').forEach(b => {
+      const on = b.dataset.tool === t;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on);
+    });
+    $('toolName').textContent = NAMES[t];
+    $('hint').textContent = HINTS[t];
+    canvas.style.cursor = t === 'text' ? 'text' : t === 'fill' ? 'copy' : 'crosshair';
+  }
+
+  const size = () => +$('size').value;
+  const fontPx = () => Math.max(6, +$('fontSize').value || 32);
+  const strokeColor = () => tool === 'eraser' ? '#ffffff' : color;
+
+  // Build palette swatches
+  PALETTE.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = c;
+    b.title = c;
+    b.setAttribute('aria-label', 'Color ' + c);
+    b.onclick = () => setColor(c);
+    $('palette').appendChild(b);
+  });
+  $('customColor').addEventListener('input', e => setColor(e.target.value));
+  setColor(color);
+
+  document.querySelectorAll('[data-tool]').forEach(b =>
+    b.addEventListener('click', () => setTool(b.dataset.tool)));
+
+  $('size').addEventListener('input', e => $('sizeVal').textContent = e.target.value);
+  $('fontSize').addEventListener('input', syncEditorStyle);
+  $('fontFamily').addEventListener('change', syncEditorStyle);
+
+  // ----- Drawing primitives -----
+  function dot(p) {
+    ctx.fillStyle = strokeColor();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size() / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawShape(a, b) {
+    ctx.lineWidth = size();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    const filled = $('fillShape').checked;
+
+    if (tool === 'line') {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    } else if (tool === 'rect') {
+      const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+      const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+      if (filled) ctx.fillRect(x, y, w, h);
+      else ctx.strokeRect(x, y, w, h);
+    } else if (tool === 'ellipse') {
+      ctx.beginPath();
+      ctx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2,
+                  Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2,
+                  0, 0, Math.PI * 2);
+      if (filled) ctx.fill();
+      else ctx.stroke();
+    }
+  }
+
+  // Flood fill: replaces the contiguous region matching the clicked pixel
+  function floodFill(sx, sy, hex) {
+    const W = canvas.width, H = canvas.height;
+    if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+
+    const img = ctx.getImageData(0, 0, W, H);
+    const d = img.data;
+    const n = parseInt(hex.slice(1), 16);
+    const fr = n >> 16 & 255, fg = n >> 8 & 255, fb = n & 255;
+
+    const s = (sy * W + sx) * 4;
+    const tr = d[s], tg = d[s + 1], tb = d[s + 2], ta = d[s + 3];
+    if (tr === fr && tg === fg && tb === fb && ta === 255) return; // nothing to change
+
+    const seen = new Uint8Array(W * H);
+    const stack = [sy * W + sx];
+    while (stack.length) {
+      const p = stack.pop();
+      if (seen[p]) continue;
+      seen[p] = 1;
+      const i = p * 4;
+      if (Math.abs(d[i] - tr) > TOL || Math.abs(d[i + 1] - tg) > TOL ||
+          Math.abs(d[i + 2] - tb) > TOL || Math.abs(d[i + 3] - ta) > TOL) continue;
+
+      d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = 255;
+      const x = p % W;
+      if (x > 0) stack.push(p - 1);
+      if (x < W - 1) stack.push(p + 1);
+      if (p >= W) stack.push(p - W);
+      if (p < W * (H - 1)) stack.push(p + W);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  // ----- Pointer input (mouse and touch via Pointer Events) -----
+  canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (editing) { commitText(); return; }  // first click closes the text box
+
+    const p = pos(e);
+    if (tool === 'fill') {
+      pushHistory();
+      floodFill(Math.floor(p.x), Math.floor(p.y), color);
+      return;
+    }
+    if (tool === 'text') {
+      openEditor(p);
+      return;
+    }
+
+    canvas.setPointerCapture(e.pointerId);
+    drawing = true;
+    start = last = p;
+    base = snapshot();
+    dirty = false;
+
+    if (tool === 'pencil' || tool === 'eraser') {
+      ensureHistory();
+      dot(p);
+    }
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = pos(e);
+
+    if (tool === 'pencil' || tool === 'eraser') {
+      // Incremental stroke segments
+      ensureHistory();
+      ctx.strokeStyle = strokeColor();
+      ctx.lineWidth = size();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    } else {
+      // Shapes: restore the pre-drag snapshot, then draw the current shape as a live preview
+      ensureHistory();
+      ctx.putImageData(base, 0, 0);
+      drawShape(start, p);
+    }
+    last = p;
+  });
+
+  const endStroke = () => {
+    drawing = false;
+    start = last = base = null;
+  };
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+
+  // ----- Text tool -----
+  function positionEditor() {
+    editor.style.left = (canvas.offsetLeft + editing.x * zoom) + 'px';
+    editor.style.top = (canvas.offsetTop + editing.y * zoom) + 'px';
+  }
+
+  function syncEditorStyle() {
+    if (!editing) return;
+    editor.style.color = color;
+    editor.style.fontFamily = $('fontFamily').value;
+    editor.style.fontSize = (fontPx() * zoom) + 'px';
+  }
+
+  function openEditor(p) {
+    editing = { x: p.x, y: p.y };
+    editor.value = '';
+    editor.style.display = 'block';
+    syncEditorStyle();
+    positionEditor();
+    editor.focus();
+  }
+
+  // Draws the typed text onto the canvas as permanent pixels (one undo step)
+  function commitText() {
+    if (!editing) return;
+    const at = editing;
+    const text = editor.value;
+    editing = null;
+    editor.style.display = 'none';
+    if (!text.trim()) return;
+
+    pushHistory();
+    const px = fontPx();
+    ctx.font = `${px}px ${$('fontFamily').value}`;
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'top';
+    text.split('\n').forEach((line, i) => ctx.fillText(line, at.x, at.y + i * px * 1.2));
+  }
+
+  function cancelText() {
+    if (!editing) return;
+    editing = null;
+    editor.value = '';
+    editor.style.display = 'none';
+  }
+
+  editor.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); cancelText(); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitText(); }
+  });
+  editor.addEventListener('blur', commitText);
+
+  // ----- File actions -----
+  $('undoBtn').onclick = undo;
+  $('redoBtn').onclick = redo;
+
+  // Clear uses an in-page dialog instead of confirm(), which some browsers
+  // and embedded previews block silently.
+  const clearModal = $('clearModal');
+  const closeClear = () => clearModal.classList.remove('open');
+
+  $('clearBtn').onclick = () => {
+    commitText();
+    clearModal.classList.add('open');
+    $('clearOk').focus();
+  };
+  $('clearCancel').onclick = closeClear;
+  clearModal.addEventListener('click', e => { if (e.target === clearModal) closeClear(); });
+  window.addEventListener('keydown', e => {
+    if (!clearModal.classList.contains('open')) return;
+    if (e.key === 'Escape') closeClear();
+    if (e.key === 'Enter') { e.preventDefault(); $('clearOk').click(); }
+  });
+  $('clearOk').onclick = () => {
+    closeClear();
+    commitText();
+    pushHistory();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  };
+
+  $('openBtn').onclick = () => $('fileInput').click();
+
+  $('fileInput').onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = '';       // allow re-opening the same file later
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      commitText();
+      pushHistory();           // undo restores the previous canvas and size
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      fit();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      alert('That file could not be opened as an image.');
+    };
+    img.src = url;
+  };
+
+  $('saveBtn').onclick = () => {
+    commitText();
+    canvas.toBlob(blob => {
+      if (!blob) { alert('Could not create the PNG.'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'drawing.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png');
+  };
+
+  // ----- Zoom controls -----
+  $('zoomIn').onclick = () => setZoom(zoom * 1.25);
+  $('zoomOut').onclick = () => setZoom(zoom / 1.25);
+  $('fitBtn').onclick = fit;
+
+  // ----- Keyboard shortcuts -----
+  window.addEventListener('keydown', e => {
+    if (editing || !(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+  });
+
+  // ----- Init -----
+  // Canvas pixels live in memory and are never reset on viewport resize,
+  // so resizing the window preserves the drawing.
+  setTool('pencil');
+  updateButtons();
+  applyZoom();
+  fit();
+  window.addEventListener('load', fit, { once: true });
+})();
+</script>
+</body>
+</html>
